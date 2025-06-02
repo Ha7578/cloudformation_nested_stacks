@@ -1,0 +1,76 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: RDS MySQL Instance for WordPress
+
+Parameters:
+  VpcId:
+    Type: String
+    Description: VPC ID from Network Stack
+
+  SubnetIds:
+    Type: CommaDelimitedList
+    Description: List of private subnet IDs for RDS
+
+  DBUsername:
+    Type: String
+    Default: wpadmin
+    NoEcho: true
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: The database admin password
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+
+Resources:
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: WordPress DB subnet group
+      SubnetIds: !Ref SubnetIds
+      DBSubnetGroupName: wordpress-subnet-group
+
+  WordPressDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: wordpress
+      AllocatedStorage: 20
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: mysql
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !GetAtt DBSecurityGroup.GroupId
+      MultiAZ: false
+      PubliclyAccessible: false
+      DeletionProtection: false
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for WordPress RDS
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 10.0.0.0/16 
+
+Outputs:
+  DBEndpoint:
+    Description: RDS Endpoint
+    Value: !GetAtt WordPressDB.Endpoint.Address
+    Export:
+      Name: !Sub "RDSstack-DBEndpoint"
+
+  DBName:
+    Description: RDS Database Name
+    Value: wordpress

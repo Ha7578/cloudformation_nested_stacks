@@ -1,0 +1,47 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudWatch Alarm for EC2 CPU Utilization
+
+Parameters:
+  ASGName:
+    Type: String
+    Description: ASG ID to monitor
+  CPUThreshold:
+    Type: Number
+    Default: "80"
+    Description: CPU Utilization threshold percentage
+  EvaluationPeriods:
+    Type: Number
+    Default: "1"
+    Description: Number of periods to evaluate
+  Period:
+    Type: Number
+    Default: "300"
+    Description: Period in seconds (e.g., 300 = 5 minutes)
+  ScalingPolicy:
+    Type: String
+   
+Resources:
+  CPUUtilizationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub CPU-High-${ASGName}
+      AlarmDescription: !Sub CPU usage > ${CPUThreshold}% for ${EvaluationPeriods} periods of ${Period} seconds
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref ASGName
+      Statistic: Maximum
+      Period: !Ref Period
+      EvaluationPeriods: !Ref EvaluationPeriods
+      Threshold: !Ref CPUThreshold
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: 
+          - !Ref ScalingPolicy   
+      
+      TreatMissingData: notBreaching
+Outputs:
+  AlarmName:
+    Description: Name of the created CloudWatch Alarm
+    Value: !Ref CPUUtilizationAlarm

@@ -1,0 +1,211 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ASG with Launch Template for WordPress installation
+
+Parameters:
+  VPCId:
+    Type: String
+  PublicSubnetIds:
+    Type: CommaDelimitedList
+    Description: Public subnets in which to launch EC2 instances
+  InstanceType:
+    Type: String
+    Default: t3.micro
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+  AMIId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id
+  DBUSER:
+    Type: String
+  DBPASS:
+    Type: String 
+    NoEcho: true
+  
+  DBHOST:
+    Type: String
+    
+Resources:
+
+
+
+
+
+
+
+  EC2CloudWatchRole:
+   Type: AWS::IAM::Role
+   Properties:
+    AssumeRolePolicyDocument:
+      Version: '2012-10-17'
+      Statement:
+        - Effect: Allow
+          Principal:
+            Service: ec2.amazonaws.com
+          Action: sts:AssumeRole
+    Path: /
+    Policies:
+      - PolicyName: EC2CloudWatchPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - cloudwatch:PutMetricData
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: "*"
+
+  EC2InstanceProfile:
+   Type: AWS::IAM::InstanceProfile
+   Properties:
+    Roles:
+      - !Ref EC2CloudWatchRole
+
+
+  EC2SG:
+   Type: AWS::EC2::SecurityGroup
+   Properties:
+    GroupDescription: Enable HTTP and SSH access for WordPress
+    VpcId: !Ref VPCId
+    SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0  # Allow HTTP from anywhere
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 0.0.0.0/0  # Limit to your IP or range in production
+    SecurityGroupEgress:
+      - IpProtocol: -1
+        FromPort: 0
+        ToPort: 0
+        CidrIp: 0.0.0.0/0  # Allow all outbound traffic
+
+
+
+  EC2LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: EC2LaunchTemplate
+      LaunchTemplateData:
+        ImageId: !Ref AMIId
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        IamInstanceProfile:
+          Name: !Ref EC2InstanceProfile
+
+        SecurityGroupIds: 
+                 - !Ref EC2SG  
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            # 1. Update and install necessary packages
+            echo "Updating system and installing required packages..."
+            sudo apt update -y
+            sudo apt install -y apache2 php libapache2-mod-php php-mysql php-gd php-xml php-mbstring php-json php-cli wget unzip
+            sudo apt install -y mysql-client
+
+            sudo apt install -y awscli jq
+
+            # 2. Start and enable Apache web server
+            echo "Starting and enabling Apache web server..."
+            sudo systemctl start apache2
+            sudo systemctl enable apache2
+
+            # 3. Download and extract WordPress
+            echo "Downloading and extracting WordPress..."
+            cd /var/www/html
+            # Remove any default index.html if it exists
+            sudo rm -f index.html
+            sudo wget https://wordpress.org/latest.tar.gz
+            sudo tar -xzf latest.tar.gz
+            sudo mv wordpress/* .
+            sudo rm -rf wordpress latest.tar.gz
+
+            # 4. Set appropriate permissions for WordPress files
+            echo "Setting file permissions for WordPress..."
+            sudo chown -R www-data:www-data /var/www/html
+            sudo chmod -R 755 /var/www/html
+            sudo find /var/www/html -type d -exec sudo chmod 755 {} \;
+            sudo find /var/www/html -type f -exec sudo chmod 644 {} \;
+
+            # 5. Configure wp-config.php
+            echo "Configuring wp-config.php..."
+            sudo cp wp-config-sample.php wp-config.php
+            sudo chmod 777 wp-config.php
+
+            # Use sed to replace database credentials in wp-config.php
+            sudo sed -i "s/database_name_here/wordpress/g" wp-config.php
+            sudo sed -i "s/username_here/${DBUSER}/g" wp-config.php
+            sudo sed -i "s/password_here/${DBPASS}/g" wp-config.php
+            sudo sed -i "s/localhost/${DBHOST}/g" wp-config.php
+
+            sudo systemctl restart apache2
+
+            echo "WordPress setup complete! You should now be able to access your WordPress site via the EC2 instance's public IP or DNS."# This script will be executed as userdata on an EC2 instance to set up WordPress on Ubuntu.
+
+          
+
+
+
+            
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !ImportValue Networkstark-VpcId
+      Protocol: HTTP
+      Port: 80
+      TargetType: instance
+      HealthCheckPath: /
+      Matcher:
+        HttpCode: 200-399
+
+  WordPressASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier: !Ref PublicSubnetIds
+      LaunchTemplate:
+        LaunchTemplateId: !Ref EC2LaunchTemplate
+        Version: !GetAtt EC2LaunchTemplate.LatestVersionNumber
+      MinSize: '1'
+      MaxSize: '3'
+      DesiredCapacity: '1'
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+      TargetGroupARNs:
+        - !Ref TargetGroup
+      Tags:
+        - Key: Name
+          Value: WordPressASGInstance
+          PropagateAtLaunch: true
+  
+  ScaleOutPolicy:
+   Type: AWS::AutoScaling::ScalingPolicy
+   Properties:
+    AutoScalingGroupName: !Ref WordPressASG
+    PolicyType: SimpleScaling
+    AdjustmentType: ChangeInCapacity
+    ScalingAdjustment: 1   
+    Cooldown: 300
+
+
+
+
+Outputs:
+  ASGName:
+    Description: Auto Scaling Group Name
+    Value: !Ref WordPressASG
+  
+  Scalingpolicyname:
+     Value: !Ref ScaleOutPolicy
+     Export:
+      Name: !Sub "ASGlaunchtemplate-ScalingPolicy"
+  TargetGroupArn:
+      Value: !Ref TargetGroup
+      Export:
+       Name: !Sub "ASGlaunchtemplate-TargetGroup"
+  LaunchTemplateId:
+    Description: Launch Template ID
+    Value: !Ref EC2LaunchTemplate

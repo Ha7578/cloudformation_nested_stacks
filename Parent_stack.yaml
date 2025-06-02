@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Parent stack to deploy a WordPress application using nested stacks.
+
+Parameters:
+  VPCCIDR:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for the VPC
+
+  DBUsername:
+    Type: String
+    Default: admin
+    NoEcho: true
+    Description: The database admin username
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: The database admin password
+
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+    Description: RDS DB Instance class
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    Description: EC2 Instance type for WordPress servers
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair for SSH access to EC2 instances
+
+  AMIId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id
+    Description: AMI ID for the EC2 instances
+
+  CPUThreshold:
+    Type: Number
+    Default: 80
+    Description: CPU Utilization threshold percentage for ASG scaling
+
+Resources:
+  # 1. Network Stack
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://hamzacfnpracticebucket.s3.us-east-1.amazonaws.com/Networkstark.yaml
+      Parameters:
+        VPCCIDR: !Ref VPCCIDR
+
+  # 2. RDS Stack
+  RDSStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: NetworkStack # RDS depends on Network Stack
+    Properties:
+      TemplateURL: https://hamzacfnpracticebucket.s3.us-east-1.amazonaws.com/RDSstack.yaml
+      Parameters:
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        SubnetIds: !GetAtt NetworkStack.Outputs.PrivateSubnetIds
+        DBUsername: !Ref DBUsername
+        DBPassword: !Ref DBPassword
+        DBInstanceClass: !Ref DBInstanceClass
+
+  # 3. ASG and Launch Template Stack
+  ASGLaunchTemplateStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: RDSStack # ASG depends on RDS and Network
+    Properties:
+      TemplateURL: https://hamzacfnpracticebucket.s3.us-east-1.amazonaws.com/ASG_launchtemplate.yaml
+      Parameters:
+        VPCId: !GetAtt NetworkStack.Outputs.VpcId
+        PublicSubnetIds: !GetAtt NetworkStack.Outputs.PublicSubnetIds
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        #AMIId: !Ref AMIId
+        DBUSER: !Ref DBUsername
+        DBPASS: !Ref DBPassword
+        DBHOST: !GetAtt RDSStack.Outputs.DBEndpoint
+        # DB_HOST is imported directly in ASG_launchtemplate.yaml from RDSstack
+
+  # 4. CPU Alarm Stack
+  CPUAlarmStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: ASGLaunchTemplateStack # Alarm depends on ASG
+    Properties:
+      TemplateURL: https://hamzacfnpracticebucket.s3.us-east-1.amazonaws.com/CPUAlarm.yaml
+      Parameters:
+        ASGName: !GetAtt ASGLaunchTemplateStack.Outputs.ASGName # Pass ASG Name
+        CPUThreshold: !Ref CPUThreshold
+        ScalingPolicy: !GetAtt ASGLaunchTemplateStack.Outputs.Scalingpolicyname
+        # ScalingPolicy is imported directly in CPUAlarm.yaml from ASG_launchtemplate
+
+  # 5. ALB Stack
+  ALBStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: ASGLaunchTemplateStack # ALB depends on ASG (for target group) and Network
+    Properties:
+      TemplateURL: https://hamzacfnpracticebucket.s3.us-east-1.amazonaws.com/ALB_stack.yaml
+      Parameters:
+        VPCId: !GetAtt NetworkStack.Outputs.VpcId
+        PublicSubnetIds: !GetAtt NetworkStack.Outputs.PublicSubnetIds
+        ASGName: !GetAtt ASGLaunchTemplateStack.Outputs.ASGName
+        TargetGroup: !GetAtt ASGLaunchTemplateStack.Outputs.TargetGroupArn
+        
+
+Outputs:
+  WordPressURL:
+    Description: The URL of the WordPress application
+    Value: !GetAtt ALBStack.Outputs.ALBDNSName

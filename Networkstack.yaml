@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates a VPC, subnets, RT, IGW and NGW
+
+Parameters:
+  VPCCIDR:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for the VPC
+
+Resources:
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: MyCustomVPC
+
+  MyPublicSubnet01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.0.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      Tags:
+        - Key: Name
+          Value: MyPublicSubnet        
+
+  MyPublicSubnet02:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.4.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      Tags:
+        - Key: Name
+          Value: MyPublicSubnet
+
+
+
+  MyPrivateSubnet01:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
+      Tags:
+        - Key: Name
+          Value: MyPrivateSubnet01
+
+  MyPrivateSubnet02:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ''
+      Tags:
+        - Key: Name
+          Value: MyPrivateSubnet02                
+
+  MyIGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+         - Key: Name
+           Value: MyInternetGateway
+
+  VPCGatewayattachment:
+    Type: AWS::EC2::VPCGatewayAttachment     
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyIGW
+
+  MyNatEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  MyNatGW:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt MyNatEIP.AllocationId
+      SubnetId: !Ref MyPublicSubnet01
+      Tags:
+        - Key: Name
+          Value: MyNatGW 
+
+  MyPublicRouteTable:
+    Type: AWS::EC2::RouteTable       
+    Properties:
+     VpcId: !Ref MyVPC
+     Tags:
+       - Key: Name
+         Value: MyPublicRouteTable
+
+  MyPrivateRouteTable:
+    Type: AWS::EC2::RouteTable       
+    Properties:
+     VpcId: !Ref MyVPC
+     Tags:
+       - Key: Name
+         Value: MyPrivateRouteTable       
+
+  MypublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayattachment
+    Properties:
+      RouteTableId: !Ref MyPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref MyIGW
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MyPublicSubnet01
+      RouteTableId: !Ref MyPublicRouteTable           
+  PublicSubnetRoute02TableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MyPublicSubnet02
+      RouteTableId: !Ref MyPublicRouteTable
+  MyprivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref MyPrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref MyNatGW    
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MyPrivateSubnet01
+      RouteTableId: !Ref MyPrivateRouteTable    
+
+  PrivateSubnet02RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref MyPrivateSubnet02
+      RouteTableId: !Ref MyPrivateRouteTable    
+Outputs:
+  VpcId:
+    Value: !Ref MyVPC
+    Export:
+      Name:  "Networkstack-VpcId"
+
+  PublicSubnetIds:
+    Value: !Join [",", [!Ref MyPublicSubnet01, !Ref MyPublicSubnet02]]
+    Export:
+      Name:  "Networkstack-PublicSubnetIds"
+
+  PrivateSubnetIds:
+    Value: !Join [",", [!Ref MyPrivateSubnet01, !Ref MyPrivateSubnet02]]
+    Export:
+      Name:  "Networkstack-PrivateSubnetIds"
